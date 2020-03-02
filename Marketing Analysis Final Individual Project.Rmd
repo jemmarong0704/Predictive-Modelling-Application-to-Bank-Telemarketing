@@ -1,0 +1,539 @@
+---
+title: "Marketing Analysis Final Project"
+author: "Jinman Rong"
+date: "12/16/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Basic setup
+rm(list = ls())
+```
+
+```{r loadlib, echo=T, results='hide', message=F, warning=F}
+# Load libraries
+# install.packages("corrplot")
+library(corrplot)                # correlation plot
+library(broom)                   # tidy the linear regression results
+library(tidyverse)               # data manipulation
+library(data.table)              # table manipulation
+# install.packages("outliers")
+library(outliers)                # check z scores
+library(class)                   # kNN          
+# install.packages("fastDummies")
+library(fastDummies)             # transit categorical variables into dummy variables
+```
+
+
+### Basic Explanatory Analysis
+
+##### 1. Load the data contained in the file data_telebank.csv and name the variable: dta_bank
+```{r}
+set.seed(123456)                                    # Random Number Generation
+dta_bank <- read.csv("~/Downloads/Bank Case.csv")   # Load data
+summary(dta_bank, maxsum = 50)                      # Check data structure
+```
+
+##### 2. In one sentence, describe variables in each column paying special attention to
+
+##### a. Type of variable (categorical/numerical) and what are the units (for the numerical only)
+
+##### b. For the ones that are numerical study whether they have outliers. There is no definition for what an outlier so we can define an outlier as any observation with a value that is more than 4 times its standard deviation.
+
+ANSWER:
+
+age: [numerical]  (year)
+
+job: type of job [categorical]
+
+marital: marital status [categorical]
+
+education: [categorical]
+
+default: has credit in default? [categorical]
+
+housing: has housing loan? [categorical]
+
+loan:  has personal loan? [categorical]
+
+contact: contact communication type [categorical]
+
+month: last contact month of year [categorical]
+
+day_of_week:  last contact day of the week [categorical]
+
+duration: last contact duration, in seconds [numerical]  (seconds)
+
+y: has the client subscribed a term deposit? [categorical:binary]
+
+There are outliers in both age and duration column under the assumption that an outlier is any observation with a value that is more than 4 times its standard deviation.
+
+###### Remove outliers in variables age and duration
+```{r}
+# Get the z-scores for each value in age and duration
+age_outlier_scores      <- scores(dta_bank$age)
+duration_outlier_scores <- scores(dta_bank$duration)
+
+# Create a logical vector the same length as outlier_scores that is "TRUE" if outlier_scores is greater than 4 or less than negative 4
+age_is_outlier          <- scores(dta_bank$age)    > 4 | scores(dta_bank$age)    < -4
+duration_is_outlier     <- duration_outlier_scores > 4 | duration_outlier_scores < -4
+
+# Add a column with info whether the age is an outlier
+dta_bank$age_is_outlier      <- age_is_outlier
+dta_bank$duration_is_outlier <- duration_is_outlier
+
+# Only get rows where the age_is_outlier column we made is equal to "FALSE"
+dta_bank_outliers_rm <- dta_bank[dta_bank$age_is_outlier == FALSE &
+                                 dta_bank$duration_is_outlier == FALSE, ]
+
+# Draw boxplots to check the final results
+boxplot(dta_bank$age)
+boxplot(dta_bank_outliers_rm$age)
+boxplot(dta_bank$duration)
+boxplot(dta_bank_outliers_rm$duration)
+```
+
+##### 3. Create a corr-plot using the package corrplot. You will have to install it using the command: install.packages()
+
+```{r}
+# Transit dependent variable into binary variable
+dta_bank_outliers_rm$y =  ifelse(dta_bank_outliers_rm$y=='yes',1,0)
+dta_bank_cleaned       <- dta_bank_outliers_rm %>% select(1:12)
+# Draw the corr-plot
+M =  cor(model.matrix(~.-1,data=dta_bank_cleaned))
+corrplot(M, order = "AOE", tl.pos = "n")
+```
+
+##### 4. Run the following command: lm(y~.,data=dta_bank)
+##### a. Write the structural equation that R is estimating?
+ANSWER:
+
+y = intercept + a1*age + b1*jobblue-collar + ... + b11*jobunknown + c1*maritalmarried +...
++ c3*maritalunknown + d1*educationbasic.6y + ... + d7*educationunknown + e1*defaultunknown + e2*defaultyes + f1*housingunknown + f2*housingyes +g1*loanyes + h1*contacttelephone + i1*monthaug + ... + i9*monthloan + j1*day_of_weekmon + ... + j4*day_of_weekwed + k1*duration
+
+##### b. Comment the results.
+##### i. Best time to perform telemarketing tasks?
+ANSWER:
+
+Month: March
+Day of the week: Wednesday
+
+##### ii. Best income groups?
+ANSWER: 
+
+Student
+
+##### iii. Potential concerns of omitted variable Bias
+ANSWER:
+
+client related variable:
+client's honest history
+
+bank related variable:
+number of contacts performed during this campaign and for this client, outcome of the previous marketing campaign
+
+social and economic variables:
+consumer price index
+
+```{r}
+reg1                   =  lm(formula = y ~ ., data = dta_bank_cleaned) 
+result                 <- reg1 %>% tidy() %>% print(n = 1e3) 
+```
+
+### Predictive Modeling and Tuning
+
+##### 1. Explain (in sentences) why and how we always do that.
+ANSWER:
+
+Steps of predictive modeling:
+
+a. Judge whether the variable is useful as predictor
+b. Plot correlation plot to think about suitable models to do predictions
+c. Set a seed for randomization.
+d. Split the data into training, validating and testing sets for the model. The training data is used to train the model and the testing set is used to test it and determine its accuracy.
+e. Train the model and test. A good way to split it would be to set aside eighty percent of the data set for training and the remaining for validating and testing.
+f. Get out the results from the confusion matrix and seek to improve the performance keys.
+
+Reasons:
+Firstly, we do the first judgment to save time in the following coding process. Predictive modeling is not like casuality analysis and we should judge before getting down to business. 
+Secondly, we split the data into training, validating and testing data to train the data first, and then test the model. The split process is randomized to ensure a good training.
+
+##### 2. From the point of view of the firm and given that we are running a predictive exercise, is there any variable that should not be included as X? If yes, please drop it.
+ANSWER:
+
+From my perspective, I think job, marital, education, default, housing, loan, duration variable should not be included as Xs when doing a predictive analysis. This is because we cannot predict the next customer's job, marital, education, default, housing or loan info. Also, we cannot predict how long will the contact lasts (duration). Therefore, using these variables are not practical in predictive analysis.
+
+##### 3. Explain the problems of overfitting and underfitting.
+ANSWER:
+
+Overfitting occurs when a statistical model or machine learning algorithm captures the noise of the data. Intuitively, overfitting occurs when the model or the algorithm fits the data too well.  Specifically, overfitting occurs if the model or algorithm shows low bias but high variance.
+
+Underfitting occurs when a statistical model or machine learning algorithm cannot capture the underlying trend of the data. Intuitively, underfitting occurs when the model or the algorithm does not fit the data well enough. Specifically, underfitting occurs if the model or algorithm shows low variance but high bias. Underfitting is often a result of an excessively simple model.
+
+Both overfitting and underfitting lead to poor predictions on new data sets.
+
+##### 4. Explain the meaning of the no free lunch theorem.
+ANSWER:
+
+On a particular problem, different search algorithms may obtain different results, but over all problems, they are indistinguishable. It follows that if an algorithm achieves superior results on some problems, it must pay with inferiority on other problems. In this sense there is no free lunch in search.
+
+##### 5. For the following 4 models, write their structural equations and comment:
+##### a. Which one overfits more?
+##### b. Which one underfits more?
+##### c. Is the model that fits the training data the best one that has the best predictive power?
+##### d. Can we use a confusion matrix to analyze the problems of underfitting?
+##### e. Which data set should we use to run these regressions?
+ANSWER:
+
+Firstly, After comparing the accuracies of four different models using both training and testing data, I find that they are quite similar. This means that in this case, those models do not make much difference in fitting data. The conclusion makes sense because in all, they are all linear models that have similar model structure. Furthermore, due to the high accuracy of all four models (nearly 90 is very high), we can also guess that the scenario is quite suitable for predicting data using linear model.
+
+Secondly, my opinion about " Is the model that fits the training data the best one that has the best predictive power?" is not exactly. The model that fits the training data the best does not mean to have the best predictive power. When it comes to prediction, we need to consider confusion matrix(accuracy) and overfitting/underfitting problem. Overfits leads to bad prediction because the model fits the training data too well but not the testing data. Sometimes bias is necessary to obtain the best prediction. (Bias-variance tradeoff)
+
+Thirdly, a confusion matrix is a table that is often used to describe the performance of a classification model (or “classifier”) on a set of test data for which the true values are known. It allows the visualization of the performance of an algorithm. However, if we want to analyse overfitting/underfitting problem, we need to compare the two confusion matrixs using the training and testing data separately. If the model is overfitting, it shows a higher accuracy in fitting training data. If the model is underfitting, it shows a higher accuracy in fitting testing data.
+
+About the dataset, I think we should use the datset that drops the unrelevant variables.
+```{r}
+# Dataset manipulation: drop unrelevant variables
+dta_bank_drop <- dta_bank_outliers_rm %>% select(age, contact, month, day_of_week, y)
+```
+
+###### split training, validating and testing data 
+```{r}
+# Load train, valid and test datasets: 80%, 10%, 10%
+# Training & validation
+RAMDOM_SEED = 22
+sample_split = function(dta_bank_drop, y, p = 0.8, v = 0.1) {
+  len = length(unlist(dta_bank_drop[,1]))
+  
+  # Generate index for spliting original dataset
+  set.seed(RAMDOM_SEED)
+  train_index = sample(1:len, round(len*p, 0))
+  val_index = sample((1:len)[-train_index], round(len*v, 0))
+  test_index = (1:len)[-c(train_index, val_index)]
+  cat(sprintf('[Description]\n  Number of sample: %7s\n  Training set: %11s\n  Validation set: %8s\n  Test set: %15s', 
+              len, length(train_index), length(val_index), length(test_index)))
+  
+  # Generate training set, validation set and testing set
+  X = colnames(dta_bank_drop)[colnames(dta_bank_drop) != y]
+  train_x = dta_bank_drop[train_index, X]
+  train_y = dta_bank_drop[train_index, y]
+  val_x = dta_bank_drop[val_index, X]
+  val_y = dta_bank_drop[val_index, y]
+  test_x = dta_bank_drop[test_index, X]
+  test_y = dta_bank_drop[test_index, y]
+  
+  dataset_list = list(train_x=train_x, train_y=train_y, val_x=val_x, 
+                      val_y=val_y, test_x=test_x, test_y=test_y, 
+                      train_n=length(train_index), val_n=length(val_index), test_n=length(test_index))
+}
+```
+
+```{r}
+dta_bank_drop = as.data.frame(dta_bank_drop)
+sample        = sample_split(dta_bank_drop,'y')
+```
+
+###### regression 1:
+```{r}
+lm1              =  lm     (sample$train_y ~ age + factor(month), data = sample$train_x)
+result1          <- lm1    %>% tidy() %>% print(n = 1e3)
+pred_data1       =  predict(lm1, sample$test_x)
+pred_y_reg1      =  copy   (pred_data1)
+pred_data1_train =  predict(lm1, sample$train_x)
+```
+
+```{r}
+# Transform continuous data to discrete data: classifier
+for (i in 1:length(pred_data1)) {
+  if(pred_data1[i] <  0.5){pred_data1[i] = 0}
+  if(pred_data1[i] >= 0.5){pred_data1[i] = 1}
+}
+
+for (i in 1:length(pred_data1_train)) {
+  if(pred_data1_train[i] <  0.5){pred_data1_train[i] = 0}
+  if(pred_data1_train[i] >= 0.5){pred_data1_train[i] = 1}
+}
+
+```
+
+```{r}
+# Confusion matrix and Accuracy
+conf_nat1       <- table(pred_data1, sample$test_y)
+Accuracy1       <- sum  (diag(conf_nat1))/ sum(conf_nat1)*100
+conf_nat1
+Accuracy1
+
+conf_nat1_train <- table(pred_data1_train, sample$train_y)
+Accuracy1_train <- sum  (diag(conf_nat1_train))/ sum(conf_nat1_train)*100
+conf_nat1_train
+Accuracy1_train
+```
+
+###### regression 2:
+```{r}
+lm2              =  lm     (sample$train_y ~ age + I(age^2) + I(age^3) + factor(month),
+                            data = sample$train_x)
+result2          <- lm2    %>% tidy() %>% print(n = 1e3) 
+pred_data2       =  predict(lm2,sample$test_x)
+pred_y_reg2      =  copy   (pred_data2)
+pred_data2_train =  predict(lm2, sample$train_x)
+```
+
+```{r}
+# Transform continuous data to discrete data: classifier
+for (i in 1:length(pred_data2)) {
+  if(pred_data2[i] <  0.5){pred_data2[i] = 0}
+  if(pred_data2[i] >= 0.5){pred_data2[i] = 1}
+}
+
+for (i in 1:length(pred_data2_train)) {
+  if(pred_data2_train[i] <  0.5){pred_data2_train[i] = 0}
+  if(pred_data2_train[i] >= 0.5){pred_data2_train[i] = 1}
+}
+```
+
+```{r}
+# Confusion matrix and accuracy
+conf_nat2       <- table(pred_data2, sample$test_y)
+Accuracy2       <- sum  (diag(conf_nat2))/ sum(conf_nat2)*100
+conf_nat2
+Accuracy2
+
+conf_nat2_train <- table(pred_data2_train, sample$train_y)
+Accuracy2_train <- sum  (diag(conf_nat2_train))/ sum(conf_nat2_train)*100
+conf_nat2_train
+Accuracy2_train
+```
+
+###### regression 3:
+```{r}
+lm3              =  lm     (sample$train_y ~ ., data = sample$train_x)
+result3          <- lm3    %>% tidy() %>% print(n = 1e3) 
+pred_data3       =  predict(lm3, sample$test_x)
+pred_y_reg3      =  copy   (pred_data3)
+pred_data3_train =  predict(lm3, sample$train_x)
+```
+
+```{r}
+# Transform continuous data to discrete data: classifier
+for (i in 1:length(pred_data3)) {
+  if(pred_data3[i] < 0.5){pred_data3[i] = 0}
+  if(pred_data3[i] >= 0.5){pred_data3[i] = 1}
+}
+
+for (i in 1:length(pred_data3_train)) {
+  if(pred_data3_train[i] < 0.5){pred_data3_train[i] = 0}
+  if(pred_data3_train[i] >= 0.5){pred_data3_train[i] = 1}
+}
+```
+
+```{r}
+conf_nat3       <- table(pred_data3, sample$test_y)
+Accuracy3       <- sum  (diag(conf_nat3)) /sum(conf_nat3)*100
+conf_nat3
+Accuracy3
+
+conf_nat3_train <- table(pred_data3_train, sample$train_y)
+Accuracy3_train <- sum  (diag(conf_nat3_train)) /sum(conf_nat3_train)*100
+conf_nat3_train
+Accuracy3_train
+```
+
+####### regression 4:
+```{r}
+lm4              =  lm     (sample$train_y ~ .^2, data = sample$train_x)
+result4          <- lm4    %>% tidy() %>% print(n = 1e3)
+pred_data4       =  predict(lm4,sample$test_x)
+pred_y_reg4      =  copy   (pred_data4)
+pred_data4_train =  predict(lm4, sample$train_x)
+```
+
+```{r}
+# Transform continuous data to discrete data: classifier
+for (i in 1:length(pred_data4)) {
+  if(pred_data4[i] <  0.5){pred_data4[i] = 0}
+  if(pred_data4[i] >= 0.5){pred_data4[i] = 1}
+}
+
+for (i in 1:length(pred_data4_train)) {
+  if(pred_data4_train[i] <  0.5){pred_data4_train[i] = 0}
+  if(pred_data4_train[i] >= 0.5){pred_data4_train[i] = 1}
+}
+```
+
+```{r}
+conf_nat4       <- table(pred_data4, sample$test_y)
+Accuracy4       <- sum  (diag(conf_nat4))/ sum(conf_nat4)*100
+conf_nat4
+Accuracy4
+
+conf_nat4_train <- table(pred_data4_train, sample$train_y)
+Accuracy4_train <- sum  (diag(conf_nat4_train))/ sum(conf_nat4_train)*100
+conf_nat4_train
+Accuracy4_train
+```
+
+### Improving the predictive power
+##### 1. Make a visualization to inspect the relationship between the Y and each of the X that you have included in the regressions above.
+##### a. Does it look linear?
+ANSWER:
+
+Regression 1, 3 and 4 look linear while regression 2 looks nonlinear. 
+
+```{r}
+pairs(cbind(sample$test_x, pred_y_reg1), pch = 16, cex = .5)
+pairs(cbind(sample$test_x, pred_y_reg2), pch = 16, cex = .5)
+pairs(cbind(sample$test_x, pred_y_reg3), pch = 16, cex = .5)
+pairs(cbind(sample$test_x, pred_y_reg4), pch = 16, cex = .5)
+```
+
+##### 2. Use the other predictive methods seen in class (like NB classifiers or KNN) to check if you can improve the performance.
+##### 3. Do they make it better? Worse?
+ANSWER:
+
+Both NB classifier and kNN are used to do predictions and their accuracy are quite similar. The accuracy of NB classifier is 89.48661 and the accuracy of kNN 89.43748, is which means NB classifiers is slightly better.
+```{r}
+# data manipulation for NB classifier
+data    = dta_bank_drop %>% mutate(subscribe = factor(y, levels = c(0, 1), labels = c('No', 'Yes'))) %>% na.omit()  %>% select(1,2,3,4,6)
+sample2 = sample_split  (data,'subscribe')
+```
+
+##### naive bayes
+```{r}
+# Naive bayes
+NBclassifier         =  naivebayes::naive_bayes(formula = sample2$train_y ~ .,
+                                           laplace = 1, 
+                                           data    = sample2$train_x)
+
+# Evaluating model performance on validation set
+pred_nb_valid        =  predict(NBclassifier, newdata = sample2$val_x  )
+pred_nb_training     =  predict(NBclassifier, newdata = sample2$train_x)
+pred_nb_testing      =  predict(NBclassifier, newdata = sample2$test_x ) 
+
+# Accuracy and cross table of training and testing data
+conf_nat_nb_training <- table(pred_nb_training, sample2$train_y)
+Accuracy_nb_training <- sum  (diag(conf_nat_nb_training))/ sum(conf_nat_nb_training)*100
+conf_nat_nb_training
+Accuracy_nb_training
+
+conf_nat_nb_testing  <- table(pred_nb_testing, sample2$test_y)
+Accuracy_nb_testing  <- sum  (diag(conf_nat_nb_testing))/ sum(conf_nat_nb_testing)*100
+conf_nat_nb_testing
+Accuracy_nb_testing
+```
+
+##### kNN
+
+```{r}
+# Transform data into dummy variable
+dta_bank_d_final     <- dummy_cols(dta_bank_drop) %>% select(-contact, -month,
+                                                             -day_of_week)
+# Define a min-max normalize() function
+normalize <- function(x) {
+return((x - min(x)) / (max(x) - min(x)))
+}
+
+# Normalize the age variable
+dta_bank_d_final$age =  normalize(dta_bank_d_final$age)
+```
+
+```{r, include=FALSE}
+# Split sample
+sample3       =  sample_split(dta_bank_d_final,'y')
+sqrt(nrow(sample3$train_x))
+# To identify optimum value of k, generally square root of total no of observations (32562) which is 180.4494 is taken, so will try with 180, 181 then will check for optimal value of k.
+valid_actual  =  sample3$val_y
+
+knn_valid_180 =  knn(train = sample3$train_x, test = sample3$val_x, cl = sample3$train_y, 
+                    k = 180)
+
+knn_valid_181 =  knn(train = sample3$train_x, test = sample3$val_x, cl = sample3$train_y, 
+                    k = 181)
+
+ACC_valid_180 <- 100 * sum(valid_actual == knn_valid_180)/ nrow(valid_actual)
+ACC_valid_181 <- 100 * sum(valid_actual == knn_valid_181)/ nrow(valid_actual)
+ACC_valid_180
+ACC_valid_181
+
+# Since k = 180 and k = 181 have the same accuracy, k = 181 is chosen here.
+```
+
+```{r}
+#find the optimized k
+i      = 1                     # declaration to initiate for loop
+k.optm = 1                     # declaration to initiate for loop
+for (i in 1:50){ 
+    knn.mod   = class::knn(train = sample3$train_x, cl    = sample3$train_y,
+                           test  = sample3$val_x  , k     = i)
+    k.optm[i] = 100 * sum(sample3$val_y == knn.mod)/ NROW(sample3$val_y)
+    k         = i  
+    cat(k,'=',k.optm[i],'\n')       # to print % accuracy 
+}
+```
+
+```{r}
+# accuracy plot: choose k = 46
+plot(k.optm, type = "b", xlab = "K- Value",ylab = "Accuracy level")
+```
+
+```{r}
+# knn of validating data for k = 46
+knn_valid_46 =  knn(train = sample3$train_x, test = sample3$val_x, 
+                    cl    = sample3$train_y, k    = 46)
+ACC_valid_46 <- 100 * sum(valid_actual == knn_valid_46)/ NROW(valid_actual)
+ACC_valid_46 
+```
+
+
+```{r}
+# knn of testing data for k = 46
+knn_test_46  =  knn(train = sample3$train_x, test = sample3$test_x,
+                    cl    = sample3$train_y, k    = 46)
+test_actual  =  sample3$test_y
+ACC_test_46  <- 100 * sum(test_actual == knn_test_46)/ NROW(test_actual)
+ACC_test_46 
+```
+
+```{r}
+# knn of training data for k = 46
+knn_train_46 =  knn(train = sample3$train_x, test = sample3$train_x, 
+                   cl    = sample3$train_y, k = 46)
+train_actual =  sample3$train_y
+ACC_train_46 <- 100 * sum(train_actual == knn_train_46)/ NROW(train_actual)
+ACC_train_46
+```
+
+### Causal Questions
+##### 1. When we study causality we always focus on the parameters multiplying the X variables instead of the predictive capacity of the model. We then give a causal interpretation to the estimated coefficients.
+##### a. Explain when in marketing is preferable a causal analysis to a predictive analysis.
+
+ANSWER:
+
+In prediction analysis, the goal is to develop a formula for making predictions about the dependent variable, based on the observed values of the independent variables. In causal analysis, the independent variables are regarded as causes of the dependent variable. The aim of the study is to determine whether a particular independent variable really affects the dependent variable, and to estimate the magnitude of that effect, if any.
+
+Marketers care more about the casualities between parameters instead of using independent variables to do predictions about dependent variables. Their goal is to explain the relationships between different variables. 
+
+##### b. In the context of a linear regression, explain the concepts of a biased estimator.
+ANSWER:
+
+In statistics, the bias of an estimator is the difference between this estimator's expected value and the true value of the parameter being estimated. An estimator or decision rule with zero bias is called unbiased. In the context of a linear regression , biased estimator means the estimator is different from the true value.
+
+##### 2. Which of the variables could be interesting to analyze from a causal point of view. Give examples.
+ANSWER:
+
+Actually, those variables dropped when doing predictive analysis are quite intesting to analyze from a casual point of view. They cannot be predicted as predictors but are effective in explaining the dependent variable.
+
+##### 3. For those variables what would be the potential omitted variables problem?
+ANSWER:
+
+The answer is quite similar in the first part: Basic Explanatory Analysis. I come up with several variables that if omitted will cause OVB problem:
+client related variable:
+client's honest history
+income
+place of birth
+
+bank related variable:
+number of contacts performed during marketing campaign and for this client, outcome of the previous marketing campaign
+
+social and economic variables:
+consumer price index
